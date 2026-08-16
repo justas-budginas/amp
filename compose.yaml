@@ -1,0 +1,21 @@
+name: amp
+
+services:
+  bot:
+    image: ghcr.io/justas-budginas/amp:develop
+    pull_policy: always
+    env_file:
+      - .env.amp
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
