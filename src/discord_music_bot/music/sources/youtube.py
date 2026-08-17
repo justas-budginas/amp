@@ -84,7 +84,7 @@ class YoutubeSource(SourceAdapter):
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
-            "format": "18",
+            "format": "bestaudio/best",
             "ignoreerrors": playlist,
             "noplaylist": not playlist,
             "js_runtimes": {"node": {}},

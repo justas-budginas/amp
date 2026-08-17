@@ -68,7 +68,7 @@ async def test_extraction_enables_node_runtime(monkeypatch: pytest.MonkeyPatch) 
 
     await source._extract_info("https://www.youtube.com/watch?v=test", playlist=False)
 
-    assert captured["format"] == "18"
+    assert captured["format"] == "bestaudio/best"
     assert captured["js_runtimes"] == {"node": {}}
 
 
