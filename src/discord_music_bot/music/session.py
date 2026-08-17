@@ -214,6 +214,13 @@ class MusicSession:
                         self._current = None
                         self._state = PlaybackState.IDLE
                         self._activity.clear()
+                    else:
+                        logger.info(
+                            "Dequeued track in guild %s: title=%r queue_remaining=%s",
+                            self.guild_id,
+                            track.title,
+                            len(self._queue),
+                        )
 
                 if track is None:
                     try:
@@ -237,17 +244,35 @@ class MusicSession:
                     async with self._lock:
                         self._current = track
                         self._state = PlaybackState.PLAYING
+                    logger.info(
+                        "Resolving track for playback in guild %s: title=%r",
+                        self.guild_id,
+                        track.title,
+                    )
                     resolved = await self._source.resolve(track)
                     audio = self._player.create_source(resolved)
+                    logger.info(
+                        "Starting voice playback in guild %s: title=%r",
+                        self.guild_id,
+                        resolved.title,
+                    )
+                    track_title = track.title
 
                     def after(
                         error: Exception | None,
                         *,
+                        current_title: str = track_title,
                         callback_error: list[Exception | None] = callback_error,
                         finished: asyncio.Event = finished,
                         loop: asyncio.AbstractEventLoop = loop,
                     ) -> None:
                         callback_error[0] = error
+                        logger.warning(
+                            "Voice playback callback in guild %s: title=%r error_type=%s",
+                            self.guild_id,
+                            current_title,
+                            type(error).__name__ if error is not None else "none",
+                        )
                         loop.call_soon_threadsafe(finished.set)
 
                     async with self._lock:
@@ -256,12 +281,21 @@ class MusicSession:
                         self._voice.play(audio, after=after)
                     await self._notify_now_playing(resolved)
                     await finished.wait()
+                    logger.info(
+                        "Voice playback finished in guild %s: title=%r callback_error=%s",
+                        self.guild_id,
+                        track.title,
+                        type(callback_error[0]).__name__
+                        if callback_error[0] is not None
+                        else "none",
+                    )
 
                     if callback_error[0] is not None:
                         logger.warning(
-                            "Playback callback failed in guild %s: %s",
+                            "Playback callback failed in guild %s: title=%r error_type=%s",
                             self.guild_id,
-                            callback_error[0],
+                            track.title,
+                            type(callback_error[0]).__name__,
                         )
                         await self._notify(f"Playback failed for **{track.title}**; skipping it.")
                     else:
@@ -286,6 +320,11 @@ class MusicSession:
                             self._discard_track = None
                         self._current = None
                         self._state = PlaybackState.IDLE
+                    logger.info(
+                        "Playback state reset in guild %s: title=%r",
+                        self.guild_id,
+                        track.title,
+                    )
         except asyncio.CancelledError:
             raise
         finally:

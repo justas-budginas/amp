@@ -117,6 +117,23 @@ Queues are held in memory. Restarting the container clears active queues and pla
 
 Playback currently streams directly from YouTube rather than prebuffering complete tracks. Short network or CDN interruptions may still cause audio jitter; Lavalink or temporary-file playback is not implemented yet.
 
+## Playback Troubleshooting
+
+Follow the playback lifecycle for a failing track with:
+
+```sh
+docker compose logs --since 10m bot
+```
+
+Useful diagnostic messages include:
+
+- `FFmpeg produced first audio frame`: FFmpeg opened the stream and returned audio.
+- `FFmpeg stream ended ... frames=0 error=http_403`: YouTube rejected the stream before audio started.
+- `FFmpeg stream ended ... frames>0`: The stream failed after playback had begun.
+- `FFmpeg cleanup ... returncode=None->-9`: FFmpeg was forcefully cleaned up while still running; correlate this with the preceding stream and callback messages before treating it as the root cause.
+
+When reporting a playback failure, include the messages from `Dequeued track` through `Playback state reset` for that track. Do not paste signed YouTube stream URLs, tokens, cookies, or authorization headers from the logs.
+
 ## Local Development
 
 Python 3.11 or newer is required.

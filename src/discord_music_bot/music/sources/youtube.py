@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping
 from urllib.parse import parse_qs, urlparse
 
@@ -13,6 +14,8 @@ from .base import (
     NoPlayableTracksError,
     SourceAdapter,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class YoutubeSource(SourceAdapter):
@@ -63,6 +66,7 @@ class YoutubeSource(SourceAdapter):
         return SourceResult((track,))
 
     async def resolve(self, track: Track) -> Track:
+        logger.info("Resolving YouTube stream: title=%r", track.title)
         try:
             info = await self._extract_info(track.source_url, playlist=False)
         except TimeoutError as exc:
@@ -77,6 +81,17 @@ class YoutubeSource(SourceAdapter):
         resolved = self._track_from_info(info, existing=track)
         if resolved is None or not resolved.stream_url:
             raise ExtractionError(f"no playable stream found for {track.title}")
+        stream_url = urlparse(resolved.stream_url)
+        logger.info(
+            "Resolved YouTube stream: title=%r host=%s format=%s protocol=%s "
+            "headers=%s duration=%s",
+            resolved.title,
+            stream_url.hostname or "unknown",
+            parse_qs(stream_url.query).get("itag", ["unknown"])[0],
+            info.get("protocol", "unknown"),
+            tuple(header_name for header_name, _ in resolved.http_headers),
+            resolved.duration,
+        )
         return resolved
 
     async def _extract_info(self, url: str, *, playlist: bool) -> Mapping[str, object] | None:
