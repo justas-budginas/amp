@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import queue
+import threading
+import time
 from collections.abc import Mapping
 from urllib.parse import parse_qs, urlparse
 
@@ -28,35 +31,44 @@ class _YoutubeStream:
         response: MediaStream,
         downloader: yt_dlp.YoutubeDL,
         stream_url: str,
+        title: str,
     ) -> None:
         self._response = response
         self._downloader = downloader
         self._stream_url = stream_url
+        self._title = title
         self._closed = False
+        self._state_lock = threading.Lock()
         self._offset = 0
         self._reconnects = 0
 
     def read(self, size: int = -1) -> bytes:
         while not self._closed:
             try:
-                return self._response.read(size)
+                data = self._response.read(size)
+                self._offset += len(data)
+                return data
             except yt_dlp.networking.exceptions.IncompleteRead as exc:
-                self._offset += max(exc.partial, 0)
+                discarded_bytes = max(exc.partial, 0)
                 if self._reconnects >= self._max_reconnects:
                     logger.warning(
-                        "YouTube media relay exhausted reconnects: bytes_read=%s "
-                        "bytes_expected=%s reconnects=%s",
+                        "YouTube media relay exhausted reconnects: title=%r bytes_read=%s "
+                        "bytes_discarded=%s bytes_expected=%s reconnects=%s",
+                        self._title,
                         self._offset,
+                        discarded_bytes,
                         exc.expected if isinstance(exc.expected, int) else "unknown",
                         self._reconnects,
                     )
                     self._close_response()
                     return b""
-                if not self._resume():
+                if not self._resume(discarded_bytes):
                     return b""
             except yt_dlp.networking.exceptions.TransportError as exc:
                 logger.warning(
-                    "YouTube media relay failed: error_type=%s bytes_read=%s reconnects=%s",
+                    "YouTube media relay failed: title=%r error_type=%s bytes_read=%s "
+                    "reconnects=%s",
+                    self._title,
                     type(exc).__name__,
                     self._offset,
                     self._reconnects,
@@ -65,7 +77,8 @@ class _YoutubeStream:
                 return b""
         return b""
 
-    def _resume(self) -> bool:
+    def _resume(self, discarded_bytes: int) -> bool:
+        started_at = time.monotonic()
         try:
             response = self._downloader.urlopen(
                 yt_dlp.networking.Request(
@@ -75,11 +88,14 @@ class _YoutubeStream:
             )
         except Exception as exc:
             logger.warning(
-                "YouTube media relay reconnect failed: error_type=%s bytes_read=%s "
-                "reconnects=%s",
+                "YouTube media relay reconnect failed: title=%r error_type=%s "
+                "bytes_read=%s bytes_discarded=%s reconnects=%s elapsed_ms=%s",
+                self._title,
                 type(exc).__name__,
                 self._offset,
+                discarded_bytes,
                 self._reconnects,
+                round((time.monotonic() - started_at) * 1000),
             )
             self._close_response()
             return False
@@ -87,37 +103,166 @@ class _YoutubeStream:
         status = getattr(response, "status", None)
         if status != 206:
             logger.warning(
-                "YouTube media relay reconnect rejected: status=%s bytes_read=%s",
+                "YouTube media relay reconnect rejected: title=%r status=%s "
+                "bytes_read=%s bytes_discarded=%s elapsed_ms=%s",
+                self._title,
                 status if isinstance(status, int) else "unknown",
                 self._offset,
+                discarded_bytes,
+                round((time.monotonic() - started_at) * 1000),
             )
             with contextlib.suppress(Exception):
                 response.close()
             self._close_response()
             return False
 
-        self._close_response()
-        self._response = response
-        self._reconnects += 1
+        with self._state_lock:
+            if self._closed:
+                with contextlib.suppress(Exception):
+                    response.close()
+                return False
+            previous_response = self._response
+            self._response = response
+            self._reconnects += 1
+        with contextlib.suppress(Exception):
+            previous_response.close()
         logger.info(
-            "Resumed YouTube media relay: bytes_read=%s reconnects=%s",
+            "Resumed YouTube media relay: title=%r bytes_read=%s reconnects=%s "
+            "bytes_discarded=%s elapsed_ms=%s",
+            self._title,
             self._offset,
             self._reconnects,
+            discarded_bytes,
+            round((time.monotonic() - started_at) * 1000),
         )
         return True
 
     def _close_response(self) -> None:
+        with self._state_lock:
+            response = self._response
         with contextlib.suppress(Exception):
-            self._response.close()
+            response.close()
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
+        with self._state_lock:
+            if self._closed:
+                return
+            self._closed = True
+            response = self._response
         try:
-            self._close_response()
+            with contextlib.suppress(Exception):
+                response.close()
         finally:
             self._downloader.close()
+
+
+class _BufferedYoutubeStream:
+    _chunk_size = 64 * 1024
+    _max_chunks = 16
+    _underrun_log_threshold_seconds = 0.1
+
+    def __init__(self, source: MediaStream, title: str) -> None:
+        self._source = source
+        self._title = title
+        self._chunks: queue.Queue[bytes | None] = queue.Queue(maxsize=self._max_chunks)
+        self._buffer = bytearray()
+        self._stop = threading.Event()
+        self._closed = False
+        self._eof = False
+        self._delivered_data = False
+        self._underruns = 0
+        self._state_lock = threading.Lock()
+        self._producer: threading.Thread | None = None
+
+    def read(self, size: int = -1) -> bytes:
+        if size == 0 or not self._start_producer():
+            return b""
+        if size < 0:
+            while not self._eof:
+                self._receive_chunk()
+            data = bytes(self._buffer)
+            self._buffer.clear()
+            self._delivered_data = self._delivered_data or bool(data)
+            return data
+
+        while len(self._buffer) < size and not self._eof:
+            self._receive_chunk()
+        data = bytes(self._buffer[:size])
+        del self._buffer[:size]
+        self._delivered_data = self._delivered_data or bool(data)
+        return data
+
+    def _start_producer(self) -> bool:
+        with self._state_lock:
+            if self._closed:
+                return False
+            if self._producer is None:
+                self._producer = threading.Thread(
+                    target=self._produce,
+                    daemon=True,
+                    name="youtube-media-prefetch",
+                )
+                self._producer.start()
+            return True
+
+    def _receive_chunk(self) -> None:
+        queue_was_empty = self._chunks.empty()
+        started_at = time.monotonic()
+        chunk = self._chunks.get()
+        elapsed_seconds = time.monotonic() - started_at
+        if (
+            queue_was_empty
+            and self._delivered_data
+            and elapsed_seconds >= self._underrun_log_threshold_seconds
+        ):
+            self._underruns += 1
+            logger.warning(
+                "YouTube media buffer underrun: title=%r wait_ms=%s occurrences=%s",
+                self._title,
+                round(elapsed_seconds * 1000),
+                self._underruns,
+            )
+        if chunk is None:
+            self._eof = True
+        else:
+            self._buffer.extend(chunk)
+
+    def _produce(self) -> None:
+        try:
+            while not self._stop.is_set():
+                data = self._source.read(self._chunk_size)
+                if not data or not self._put(data):
+                    return
+        except Exception as exc:
+            logger.warning(
+                "YouTube media prefetch failed: title=%r error_type=%s",
+                self._title,
+                type(exc).__name__,
+            )
+        finally:
+            self._put(None)
+
+    def _put(self, chunk: bytes | None) -> bool:
+        while not self._stop.is_set():
+            try:
+                self._chunks.put(chunk, timeout=0.1)
+                return True
+            except queue.Full:
+                pass
+        return False
+
+    def close(self) -> None:
+        with self._state_lock:
+            if self._closed:
+                return
+            self._closed = True
+            producer = self._producer
+        self._stop.set()
+        self._source.close()
+        with contextlib.suppress(queue.Full):
+            self._chunks.put_nowait(None)
+        if producer is not None and producer is not threading.current_thread():
+            producer.join(timeout=0)
 
 
 class YoutubeSource(SourceAdapter):
@@ -168,6 +313,22 @@ class YoutubeSource(SourceAdapter):
         return SourceResult((track,))
 
     async def resolve(self, track: Track) -> Track:
+        return await self._resolve(track)
+
+    async def resolve_retry(self, track: Track, failed: Track) -> Track:
+        failed_format = parse_qs(urlparse(failed.stream_url or "").query).get("itag", [None])[0]
+        return await self._resolve(
+            failed,
+            excluded_format_id=failed_format,
+            excluded_stream_url=failed.stream_url,
+        )
+
+    async def _resolve(
+        self,
+        track: Track,
+        excluded_format_id: str | None = None,
+        excluded_stream_url: str | None = None,
+    ) -> Track:
         logger.info("Resolving YouTube stream: title=%r", track.title)
         try:
             info = await self._extract_info(track.source_url, playlist=False)
@@ -180,7 +341,17 @@ class YoutubeSource(SourceAdapter):
 
         if not info:
             raise ExtractionError(f"no playable stream found for {track.title}")
-        resolved = self._track_from_info(info, existing=track)
+        selected_info = info
+        if excluded_format_id or excluded_stream_url:
+            alternate = self._alternate_audio_format(
+                info,
+                excluded_format_id,
+                excluded_stream_url,
+            )
+            if alternate is not None:
+                selected_info = dict(info)
+                selected_info.update(alternate)
+        resolved = self._track_from_info(selected_info, existing=track)
         if resolved is None or not resolved.stream_url:
             raise ExtractionError(f"no playable stream found for {track.title}")
         stream_url = urlparse(resolved.stream_url)
@@ -190,7 +361,7 @@ class YoutubeSource(SourceAdapter):
             resolved.title,
             stream_url.hostname or "unknown",
             parse_qs(stream_url.query).get("itag", ["unknown"])[0],
-            info.get("protocol", "unknown"),
+            selected_info.get("protocol", "unknown"),
             tuple(header_name for header_name, _ in resolved.http_headers),
             resolved.duration,
         )
@@ -200,18 +371,23 @@ class YoutubeSource(SourceAdapter):
         if not track.stream_url:
             raise ExtractionError(f"no playable stream found for {track.title}")
         stream_url = urlparse(track.stream_url)
+        open_task = asyncio.create_task(asyncio.to_thread(self._open_stream_sync, track))
         try:
             stream = await asyncio.wait_for(
-                asyncio.to_thread(self._open_stream_sync, track),
+                asyncio.shield(open_task),
                 timeout=self._timeout_seconds,
             )
         except TimeoutError as exc:
+            open_task.add_done_callback(self._close_late_stream)
             logger.warning(
                 "YouTube media stream opening timed out: title=%r host=%s",
                 track.title,
                 stream_url.hostname or "unknown",
             )
             raise ExtractionError("YouTube stream opening timed out") from exc
+        except asyncio.CancelledError:
+            open_task.add_done_callback(self._close_late_stream)
+            raise
         except Exception as exc:
             status = getattr(exc, "status", "unknown")
             logger.warning(
@@ -224,12 +400,24 @@ class YoutubeSource(SourceAdapter):
             )
             raise ExtractionError("YouTube stream opening failed") from exc
         logger.info(
-            "Opened YouTube media stream: title=%r host=%s format=%s transport=relay",
+            "Opened YouTube media stream: title=%r host=%s format=%s transport=relay "
+            "buffer_bytes=%s",
             track.title,
             stream_url.hostname or "unknown",
             parse_qs(stream_url.query).get("itag", ["unknown"])[0],
+            _BufferedYoutubeStream._chunk_size * _BufferedYoutubeStream._max_chunks,
         )
         return stream
+
+    @staticmethod
+    def _close_late_stream(task: asyncio.Task[MediaStream]) -> None:
+        if task.cancelled():
+            return
+        try:
+            stream = task.result()
+        except Exception:
+            return
+        stream.close()
 
     @staticmethod
     def _open_stream_sync(track: Track) -> MediaStream:
@@ -245,7 +433,8 @@ class YoutubeSource(SourceAdapter):
         except Exception:
             downloader.close()
             raise
-        return _YoutubeStream(response, downloader, track.stream_url or "")
+        stream = _YoutubeStream(response, downloader, track.stream_url or "", track.title)
+        return _BufferedYoutubeStream(stream, track.title)
 
     async def _extract_info(self, url: str, *, playlist: bool) -> Mapping[str, object] | None:
         options: dict[str, object] = {
@@ -380,6 +569,43 @@ class YoutubeSource(SourceAdapter):
             for key, header_value in value.items()
             if isinstance(key, str) and isinstance(header_value, str)
         )
+
+    @classmethod
+    def _alternate_audio_format(
+        cls,
+        info: Mapping[str, object],
+        excluded_format_id: str | None,
+        excluded_stream_url: str | None,
+    ) -> Mapping[str, object] | None:
+        formats = info.get("formats")
+        if not isinstance(formats, list):
+            return None
+        for candidate in reversed(formats):
+            if not isinstance(candidate, Mapping):
+                continue
+            candidate_url = cls._text(candidate.get("url"))
+            candidate_format = cls._text(candidate.get("format_id"))
+            candidate_itag = parse_qs(urlparse(candidate_url or "").query).get(
+                "itag", [None]
+            )[0]
+            if candidate_url == excluded_stream_url:
+                continue
+            if excluded_format_id and (
+                candidate_format == excluded_format_id
+                or candidate_format is not None
+                and candidate_format.split("-", 1)[0] == excluded_format_id
+                or candidate_itag == excluded_format_id
+            ):
+                continue
+            if cls._text(candidate.get("acodec")) in {None, "none"}:
+                continue
+            if cls._text(candidate.get("vcodec")) != "none":
+                continue
+            if cls._text(candidate.get("protocol")) not in {"http", "https"}:
+                continue
+            if candidate_url:
+                return candidate
+        return None
 
     @staticmethod
     def _clean_error(message: str) -> str:

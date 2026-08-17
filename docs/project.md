@@ -23,7 +23,7 @@ Docker is the primary way to run the bot on a server. Local Python execution is 
 
 ### Not Implemented Yet
 
-- Full-song prebuffering, temporary-file downloads, or Lavalink-based playback. The current player streams directly from YouTube and can still experience network-related jitter.
+- Full-song prebuffering, temporary-file downloads, or Lavalink-based playback. The current player uses a bounded 1 MiB in-memory prefetch buffer but can still experience jitter during longer network interruptions.
 - Pause and resume commands.
 - Per-user queue limits and command cooldown enforcement. `COMMAND_COOLDOWN_SECONDS` is currently reserved configuration.
 - Automatic retry after a mid-playback FFmpeg or network failure. Tracks are re-resolved before starting playback.

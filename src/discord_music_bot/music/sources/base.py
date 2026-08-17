@@ -41,6 +41,10 @@ class SourceAdapter(ABC):
     async def resolve(self, track: Track) -> Track:
         """Resolve a fresh stream URL for a queued track."""
 
+    async def resolve_retry(self, track: Track, failed: Track) -> Track:
+        """Resolve another stream after the first resolved stream was rejected."""
+        return await self.resolve(track)
+
     @abstractmethod
     async def open_stream(self, track: Track) -> MediaStream:
         """Open the resolved media stream without blocking the event loop."""

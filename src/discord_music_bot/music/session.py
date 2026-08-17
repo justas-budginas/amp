@@ -260,7 +260,7 @@ class MusicSession:
                             self.guild_id,
                             track.title,
                         )
-                        resolved = await self._source.resolve(track)
+                        resolved = await self._source.resolve_retry(track, resolved)
                         stream = await self._source.open_stream(resolved)
                     audio = self._player.create_source(resolved, stream)
                     stream = None

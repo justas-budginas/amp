@@ -208,11 +208,16 @@ async def test_playback_re_resolves_after_stream_open_failure() -> None:
     class RetrySource(PlaybackSource):
         def __init__(self) -> None:
             self.resolve_calls = 0
+            self.retry_calls = 0
             self.open_calls = 0
 
         async def resolve(self, track: Track) -> Track:
             self.resolve_calls += 1
             return track
+
+        async def resolve_retry(self, track: Track, _failed: Track) -> Track:
+            self.retry_calls += 1
+            return await self.resolve(track)
 
         async def open_stream(self, _track: Track):
             self.open_calls += 1
@@ -242,6 +247,7 @@ async def test_playback_re_resolves_after_stream_open_failure() -> None:
     await session.leave()
 
     assert source.resolve_calls == 2
+    assert source.retry_calls == 1
     assert source.open_calls == 2
     assert channel.messages[0][0] == "Now playing: [track](https://youtube.com/watch?v=track)"
 

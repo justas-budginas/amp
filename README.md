@@ -115,7 +115,7 @@ The bot sends a silent, clickable `Now playing` message whenever a track starts.
 
 Queues are held in memory. Restarting the container clears active queues and playback state.
 
-Playback relays YouTube media through yt-dlp's HTTP client to FFmpeg stdin rather than prebuffering complete tracks. Short network or CDN interruptions may still cause audio jitter; Lavalink or temporary-file playback is not implemented yet.
+Playback relays YouTube media through yt-dlp's HTTP client to FFmpeg stdin with a bounded 1 MiB in-memory prefetch buffer. The buffer masks short network and CDN interruptions without downloading complete tracks, but longer interruptions may still cause audio jitter. Lavalink and temporary-file playback are not implemented.
 
 ## Playback Troubleshooting
 
