@@ -587,12 +587,27 @@ class YoutubeSource(SourceAdapter):
             candidate_url = cls._text(candidate.get("url"))
             if cls._text(candidate.get("acodec")) in {None, "none"}:
                 continue
-            if cls._text(candidate.get("vcodec")) != "none":
-                continue
             if cls._text(candidate.get("protocol")) not in {"http", "https"}:
                 continue
             if candidate_url:
                 candidates.append(candidate)
+
+        preferred_fallbacks = {
+            "251": ("140", "139", "18"),
+            "140": ("139", "18"),
+            "250": ("139", "18"),
+            "249": ("18",),
+            "139": ("18",),
+        }
+        for fallback_id in preferred_fallbacks.get(excluded_format_id or "", ()):
+            for candidate in candidates:
+                candidate_url = cls._text(candidate.get("url"))
+                candidate_format = cls._text(candidate.get("format_id"))
+                candidate_itag = parse_qs(urlparse(candidate_url or "").query).get(
+                    "itag", [None]
+                )[0]
+                if candidate_format == fallback_id or candidate_itag == fallback_id:
+                    return candidate
 
         for index, candidate in enumerate(candidates):
             candidate_url = cls._text(candidate.get("url"))

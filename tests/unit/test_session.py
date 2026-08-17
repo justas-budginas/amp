@@ -221,7 +221,7 @@ async def test_playback_re_resolves_stream_open_failures() -> None:
 
         async def open_stream(self, _track: Track):
             self.open_calls += 1
-            if self.open_calls <= 2:
+            if self.open_calls <= 3:
                 raise ExtractionError("stream rejected")
             return PlaybackStream()
 
@@ -246,9 +246,9 @@ async def test_playback_re_resolves_stream_open_failures() -> None:
     await asyncio.wait_for(wait_for_message(), timeout=1)
     await session.leave()
 
-    assert source.resolve_calls == 3
-    assert source.retry_calls == 2
-    assert source.open_calls == 3
+    assert source.resolve_calls == 4
+    assert source.retry_calls == 3
+    assert source.open_calls == 4
     assert channel.messages[0][0] == "Now playing: [track](https://youtube.com/watch?v=track)"
 
 

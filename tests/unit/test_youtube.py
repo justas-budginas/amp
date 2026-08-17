@@ -79,7 +79,7 @@ async def test_extraction_enables_node_runtime(monkeypatch: pytest.MonkeyPatch) 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("failed_itag", "expected_itag"),
-    [("251", "140"), ("140", "139")],
+    [("251", "140"), ("140", "139"), ("249", "18")],
 )
 async def test_retry_resolution_uses_alternate_audio_format(
     monkeypatch: pytest.MonkeyPatch,
@@ -107,6 +107,13 @@ async def test_retry_resolution_uses_alternate_audio_format(
                     "protocol": "https",
                 },
                 {
+                    "url": "https://media.example/audio?itag=249",
+                    "format_id": "249",
+                    "acodec": "opus",
+                    "vcodec": "none",
+                    "protocol": "https",
+                },
+                {
                     "url": "https://media.example/audio?itag=140",
                     "format_id": "140",
                     "acodec": "mp4a.40.2",
@@ -118,6 +125,13 @@ async def test_retry_resolution_uses_alternate_audio_format(
                     "format_id": "251-drc",
                     "acodec": "opus",
                     "vcodec": "none",
+                    "protocol": "https",
+                },
+                {
+                    "url": "https://media.example/audio?itag=18",
+                    "format_id": "18",
+                    "acodec": "mp4a.40.2",
+                    "vcodec": "avc1.42001E",
                     "protocol": "https",
                 },
             ],

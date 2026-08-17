@@ -31,7 +31,7 @@ class NoPreviousTrackError(RuntimeError):
 
 
 class MusicSession:
-    _stream_open_attempts = 3
+    _stream_open_attempts = 4
 
     def __init__(
         self,
