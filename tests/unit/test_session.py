@@ -6,6 +6,7 @@ import pytest
 
 from discord_music_bot.music.models import PlaybackState, Track
 from discord_music_bot.music.session import MusicSession
+from discord_music_bot.music.sources.base import ExtractionError
 
 
 class FakeSource:
@@ -200,6 +201,49 @@ async def test_playback_announces_each_track_transition() -> None:
         "Now playing: [first](https://youtube.com/watch?v=first)",
         "Now playing: [second](https://youtube.com/watch?v=second)",
     ]
+
+
+@pytest.mark.asyncio
+async def test_playback_re_resolves_after_stream_open_failure() -> None:
+    class RetrySource(PlaybackSource):
+        def __init__(self) -> None:
+            self.resolve_calls = 0
+            self.open_calls = 0
+
+        async def resolve(self, track: Track) -> Track:
+            self.resolve_calls += 1
+            return track
+
+        async def open_stream(self, _track: Track):
+            self.open_calls += 1
+            if self.open_calls == 1:
+                raise ExtractionError("stream rejected")
+            return PlaybackStream()
+
+    source = RetrySource()
+    session = MusicSession(
+        1,
+        source,
+        PlaybackPlayer(),
+        max_queue_size=5,
+        idle_disconnect_seconds=60,
+    )
+    channel = FakeChannel()
+    session.set_notification_channel(channel)
+    session._voice = PlaybackVoice()
+    session._queue.add_many((make_track("track"),))
+    session._playback_task = asyncio.create_task(session._playback_loop())
+
+    async def wait_for_message() -> None:
+        while not channel.messages:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait_for_message(), timeout=1)
+    await session.leave()
+
+    assert source.resolve_calls == 2
+    assert source.open_calls == 2
+    assert channel.messages[0][0] == "Now playing: [track](https://youtube.com/watch?v=track)"
 
 
 @pytest.mark.asyncio

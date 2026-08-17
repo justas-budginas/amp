@@ -251,7 +251,17 @@ class MusicSession:
                         track.title,
                     )
                     resolved = await self._source.resolve(track)
-                    stream = await self._source.open_stream(resolved)
+                    try:
+                        stream = await self._source.open_stream(resolved)
+                    except ExtractionError:
+                        logger.warning(
+                            "Stream opening failed in guild %s; retrying with a fresh "
+                            "resolution: title=%r",
+                            self.guild_id,
+                            track.title,
+                        )
+                        resolved = await self._source.resolve(track)
+                        stream = await self._source.open_stream(resolved)
                     audio = self._player.create_source(resolved, stream)
                     stream = None
                     logger.info(
