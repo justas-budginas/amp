@@ -204,7 +204,7 @@ async def test_playback_announces_each_track_transition() -> None:
 
 
 @pytest.mark.asyncio
-async def test_playback_re_resolves_after_stream_open_failure() -> None:
+async def test_playback_re_resolves_stream_open_failures() -> None:
     class RetrySource(PlaybackSource):
         def __init__(self) -> None:
             self.resolve_calls = 0
@@ -221,7 +221,7 @@ async def test_playback_re_resolves_after_stream_open_failure() -> None:
 
         async def open_stream(self, _track: Track):
             self.open_calls += 1
-            if self.open_calls == 1:
+            if self.open_calls <= 2:
                 raise ExtractionError("stream rejected")
             return PlaybackStream()
 
@@ -246,9 +246,9 @@ async def test_playback_re_resolves_after_stream_open_failure() -> None:
     await asyncio.wait_for(wait_for_message(), timeout=1)
     await session.leave()
 
-    assert source.resolve_calls == 2
-    assert source.retry_calls == 1
-    assert source.open_calls == 2
+    assert source.resolve_calls == 3
+    assert source.retry_calls == 2
+    assert source.open_calls == 3
     assert channel.messages[0][0] == "Now playing: [track](https://youtube.com/watch?v=track)"
 
 

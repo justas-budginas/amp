@@ -31,6 +31,8 @@ class NoPreviousTrackError(RuntimeError):
 
 
 class MusicSession:
+    _stream_open_attempts = 3
+
     def __init__(
         self,
         guild_id: int,
@@ -251,17 +253,24 @@ class MusicSession:
                         track.title,
                     )
                     resolved = await self._source.resolve(track)
-                    try:
-                        stream = await self._source.open_stream(resolved)
-                    except ExtractionError:
-                        logger.warning(
-                            "Stream opening failed in guild %s; retrying with a fresh "
-                            "resolution: title=%r",
-                            self.guild_id,
-                            track.title,
-                        )
-                        resolved = await self._source.resolve_retry(track, resolved)
-                        stream = await self._source.open_stream(resolved)
+                    for attempt in range(1, self._stream_open_attempts + 1):
+                        try:
+                            stream = await self._source.open_stream(resolved)
+                            break
+                        except ExtractionError:
+                            if attempt >= self._stream_open_attempts:
+                                raise
+                            logger.warning(
+                                "Stream opening failed in guild %s; retrying with a fresh "
+                                "resolution: title=%r attempt=%s/%s",
+                                self.guild_id,
+                                track.title,
+                                attempt + 1,
+                                self._stream_open_attempts,
+                            )
+                            resolved = await self._source.resolve_retry(track, resolved)
+                    if stream is None:
+                        raise ExtractionError("stream opening did not return a media stream")
                     audio = self._player.create_source(resolved, stream)
                     stream = None
                     logger.info(

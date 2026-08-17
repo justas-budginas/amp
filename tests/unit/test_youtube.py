@@ -77,8 +77,14 @@ async def test_extraction_enables_node_runtime(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failed_itag", "expected_itag"),
+    [("251", "140"), ("140", "139")],
+)
 async def test_retry_resolution_uses_alternate_audio_format(
     monkeypatch: pytest.MonkeyPatch,
+    failed_itag: str,
+    expected_itag: str,
 ) -> None:
     source = YoutubeSource(max_queue_size=5, timeout_seconds=5)
 
@@ -93,6 +99,13 @@ async def test_retry_resolution_uses_alternate_audio_format(
             "vcodec": "none",
             "protocol": "https",
             "formats": [
+                {
+                    "url": "https://media.example/audio?itag=139",
+                    "format_id": "139",
+                    "acodec": "mp4a.40.5",
+                    "vcodec": "none",
+                    "protocol": "https",
+                },
                 {
                     "url": "https://media.example/audio?itag=140",
                     "format_id": "140",
@@ -115,12 +128,12 @@ async def test_retry_resolution_uses_alternate_audio_format(
     failed = Track(
         title="Track",
         source_url=track.source_url,
-        stream_url="https://media.example/audio?itag=251",
+        stream_url=f"https://media.example/audio?itag={failed_itag}",
     )
 
     resolved = await source.resolve_retry(track, failed)
 
-    assert resolved.stream_url == "https://media.example/audio?itag=140"
+    assert resolved.stream_url == f"https://media.example/audio?itag={expected_itag}"
     assert resolved.source_url == "https://www.youtube.com/watch?v=track"
 
 
@@ -293,10 +306,12 @@ def test_buffered_stream_prefetches_media() -> None:
             self.read_started = threading.Event()
             self.read_finished = threading.Event()
             self.read_count = 0
+            self.read_sizes: list[int] = []
             self.closed = False
 
         def read(self, size: int = -1) -> bytes:
             self.read_count += 1
+            self.read_sizes.append(size)
             self.read_started.set()
             if self.read_count == 1:
                 return b"audio"
@@ -312,6 +327,7 @@ def test_buffered_stream_prefetches_media() -> None:
     assert not source.read_started.wait(timeout=0.01)
     assert stream.read(5) == b"audio"
     assert source.read_finished.wait(timeout=1)
+    assert source.read_sizes[0] == 8 * 1024
     stream.close()
 
     assert source.closed is True

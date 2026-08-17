@@ -157,9 +157,9 @@ class _YoutubeStream:
 
 
 class _BufferedYoutubeStream:
-    _chunk_size = 64 * 1024
-    _max_chunks = 16
-    _underrun_log_threshold_seconds = 0.1
+    _chunk_size = 8 * 1024
+    _max_chunks = 128
+    _underrun_log_threshold_seconds = 2.0
 
     def __init__(self, source: MediaStream, title: str) -> None:
         self._source = source
@@ -580,23 +580,11 @@ class YoutubeSource(SourceAdapter):
         formats = info.get("formats")
         if not isinstance(formats, list):
             return None
-        for candidate in reversed(formats):
+        candidates: list[Mapping[str, object]] = []
+        for candidate in formats:
             if not isinstance(candidate, Mapping):
                 continue
             candidate_url = cls._text(candidate.get("url"))
-            candidate_format = cls._text(candidate.get("format_id"))
-            candidate_itag = parse_qs(urlparse(candidate_url or "").query).get(
-                "itag", [None]
-            )[0]
-            if candidate_url == excluded_stream_url:
-                continue
-            if excluded_format_id and (
-                candidate_format == excluded_format_id
-                or candidate_format is not None
-                and candidate_format.split("-", 1)[0] == excluded_format_id
-                or candidate_itag == excluded_format_id
-            ):
-                continue
             if cls._text(candidate.get("acodec")) in {None, "none"}:
                 continue
             if cls._text(candidate.get("vcodec")) != "none":
@@ -604,8 +592,22 @@ class YoutubeSource(SourceAdapter):
             if cls._text(candidate.get("protocol")) not in {"http", "https"}:
                 continue
             if candidate_url:
-                return candidate
-        return None
+                candidates.append(candidate)
+
+        for index, candidate in enumerate(candidates):
+            candidate_url = cls._text(candidate.get("url"))
+            candidate_format = cls._text(candidate.get("format_id"))
+            candidate_itag = parse_qs(urlparse(candidate_url or "").query).get(
+                "itag", [None]
+            )[0]
+            if candidate_url == excluded_stream_url or excluded_format_id and (
+                candidate_format == excluded_format_id
+                or candidate_format is not None
+                and candidate_format.split("-", 1)[0] == excluded_format_id
+                or candidate_itag == excluded_format_id
+            ):
+                return candidates[index - 1] if index > 0 else None
+        return candidates[-1] if candidates else None
 
     @staticmethod
     def _clean_error(message: str) -> str:
