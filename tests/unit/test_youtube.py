@@ -123,6 +123,62 @@ def test_open_stream_uses_ytdlp_http_client_and_closes_resources(
     assert captured["downloader_closed"] is True
 
 
+def test_stream_resumes_after_incomplete_read() -> None:
+    class TruncatedResponse:
+        status = 200
+        closed = False
+
+        def read(self, _size: int = -1) -> bytes:
+            raise youtube_module.yt_dlp.networking.exceptions.IncompleteRead(
+                partial=4096,
+                expected=1024,
+            )
+
+        def close(self) -> None:
+            self.closed = True
+
+    class ResumedResponse:
+        status = 206
+        closed = False
+
+        def read(self, _size: int = -1) -> bytes:
+            return b"remaining audio"
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeDownloader:
+        closed = False
+
+        def __init__(self) -> None:
+            self.requests = []
+            self.resumed_response = ResumedResponse()
+
+        def urlopen(self, request) -> ResumedResponse:
+            self.requests.append(request)
+            return self.resumed_response
+
+        def close(self) -> None:
+            self.closed = True
+
+    initial_response = TruncatedResponse()
+    downloader = FakeDownloader()
+    stream = youtube_module._YoutubeStream(
+        initial_response,
+        downloader,
+        "https://media.example/audio?sig=secret",
+    )
+
+    assert stream.read(8192) == b"remaining audio"
+    assert len(downloader.requests) == 1
+    assert downloader.requests[0].headers["Range"] == "bytes=4096-"
+    assert initial_response.closed is True
+
+    stream.close()
+    assert downloader.resumed_response.closed is True
+    assert downloader.closed is True
+
+
 @pytest.mark.asyncio
 async def test_playlist_load_truncates_more_than_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     source = YoutubeSource(max_queue_size=1, timeout_seconds=5)

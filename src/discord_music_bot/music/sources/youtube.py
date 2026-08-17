@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Mapping
 from urllib.parse import parse_qs, urlparse
@@ -20,20 +21,101 @@ logger = logging.getLogger(__name__)
 
 
 class _YoutubeStream:
-    def __init__(self, response: MediaStream, downloader: yt_dlp.YoutubeDL) -> None:
+    _max_reconnects = 3
+
+    def __init__(
+        self,
+        response: MediaStream,
+        downloader: yt_dlp.YoutubeDL,
+        stream_url: str,
+    ) -> None:
         self._response = response
         self._downloader = downloader
+        self._stream_url = stream_url
         self._closed = False
+        self._offset = 0
+        self._reconnects = 0
 
     def read(self, size: int = -1) -> bytes:
-        return self._response.read(size)
+        while not self._closed:
+            try:
+                return self._response.read(size)
+            except yt_dlp.networking.exceptions.IncompleteRead as exc:
+                self._offset += max(exc.partial, 0)
+                if self._reconnects >= self._max_reconnects:
+                    logger.warning(
+                        "YouTube media relay exhausted reconnects: bytes_read=%s "
+                        "bytes_expected=%s reconnects=%s",
+                        self._offset,
+                        exc.expected if isinstance(exc.expected, int) else "unknown",
+                        self._reconnects,
+                    )
+                    self._close_response()
+                    return b""
+                if not self._resume():
+                    return b""
+            except yt_dlp.networking.exceptions.TransportError as exc:
+                logger.warning(
+                    "YouTube media relay failed: error_type=%s bytes_read=%s reconnects=%s",
+                    type(exc).__name__,
+                    self._offset,
+                    self._reconnects,
+                )
+                self._close_response()
+                return b""
+        return b""
+
+    def _resume(self) -> bool:
+        try:
+            response = self._downloader.urlopen(
+                yt_dlp.networking.Request(
+                    self._stream_url,
+                    headers={"Range": f"bytes={self._offset}-"},
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "YouTube media relay reconnect failed: error_type=%s bytes_read=%s "
+                "reconnects=%s",
+                type(exc).__name__,
+                self._offset,
+                self._reconnects,
+            )
+            self._close_response()
+            return False
+
+        status = getattr(response, "status", None)
+        if status != 206:
+            logger.warning(
+                "YouTube media relay reconnect rejected: status=%s bytes_read=%s",
+                status if isinstance(status, int) else "unknown",
+                self._offset,
+            )
+            with contextlib.suppress(Exception):
+                response.close()
+            self._close_response()
+            return False
+
+        self._close_response()
+        self._response = response
+        self._reconnects += 1
+        logger.info(
+            "Resumed YouTube media relay: bytes_read=%s reconnects=%s",
+            self._offset,
+            self._reconnects,
+        )
+        return True
+
+    def _close_response(self) -> None:
+        with contextlib.suppress(Exception):
+            self._response.close()
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         try:
-            self._response.close()
+            self._close_response()
         finally:
             self._downloader.close()
 
@@ -163,7 +245,7 @@ class YoutubeSource(SourceAdapter):
         except Exception:
             downloader.close()
             raise
-        return _YoutubeStream(response, downloader)
+        return _YoutubeStream(response, downloader, track.stream_url or "")
 
     async def _extract_info(self, url: str, *, playlist: bool) -> Mapping[str, object] | None:
         options: dict[str, object] = {
