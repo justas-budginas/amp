@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -199,3 +200,33 @@ async def test_playback_announces_each_track_transition() -> None:
         "Now playing: [first](https://youtube.com/watch?v=first)",
         "Now playing: [second](https://youtube.com/watch?v=second)",
     ]
+
+
+@pytest.mark.asyncio
+async def test_successful_playback_callback_logs_info(caplog) -> None:
+    session = MusicSession(
+        1,
+        PlaybackSource(),
+        PlaybackPlayer(),
+        max_queue_size=5,
+        idle_disconnect_seconds=60,
+    )
+    session.set_notification_channel(FakeChannel())
+    session._voice = PlaybackVoice()
+    session._queue.add_many((make_track("track"),))
+
+    with caplog.at_level("INFO", logger="discord_music_bot.music.session"):
+        session._playback_task = asyncio.create_task(session._playback_loop())
+
+        async def wait_for_callback() -> None:
+            while not any("Voice playback callback" in record.message for record in caplog.records):
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(wait_for_callback(), timeout=1)
+        await session.leave()
+
+    callback_record = next(
+        record for record in caplog.records if "Voice playback callback" in record.message
+    )
+    assert callback_record.levelno == logging.INFO
+    assert "error_type=none" in callback_record.message

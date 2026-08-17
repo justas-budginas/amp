@@ -129,8 +129,9 @@ Useful diagnostic messages include:
 
 - `FFmpeg produced first audio frame`: FFmpeg opened the stream and returned audio.
 - `YouTube media stream opening failed ... status=403`: YouTube rejected the resolved stream before audio started.
+- `FFmpeg stream ended ... returncode=0 ... error=none`: Playback completed normally.
 - `FFmpeg stream ended ... frames=0`: FFmpeg could not decode audio from the relayed stream.
-- `FFmpeg stream ended ... frames>0`: The stream failed after playback had begun.
+- `FFmpeg stream ended ... returncode!=0` or `error!=none`: Playback failed before or after producing audio.
 - `FFmpeg cleanup ... returncode=None->-9`: FFmpeg was forcefully cleaned up while still running; correlate this with the preceding stream and callback messages before treating it as the root cause.
 
 When reporting a playback failure, include the messages from `Dequeued track` through `Playback state reset` for that track. Do not paste signed YouTube stream URLs, tokens, cookies, or authorization headers from the logs.

@@ -270,7 +270,8 @@ class MusicSession:
                         loop: asyncio.AbstractEventLoop = loop,
                     ) -> None:
                         callback_error[0] = error
-                        logger.warning(
+                        log = logger.warning if error is not None else logger.info
+                        log(
                             "Voice playback callback in guild %s: title=%r error_type=%s",
                             self.guild_id,
                             current_title,

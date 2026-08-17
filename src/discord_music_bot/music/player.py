@@ -38,7 +38,7 @@ class _LoggedAudioSource(discord.AudioSource):
         )[0]
         self._started_at = time.monotonic()
         self._frames_read = 0
-        self._cleanup_count = 0
+        self._cleaned_up = False
         self._end_logged = False
         self._current_error: Exception | None = None
 
@@ -63,17 +63,19 @@ class _LoggedAudioSource(discord.AudioSource):
             self._current_error = error
         if not self._end_logged:
             self._end_logged = True
-            logger.warning(
+            returncode = self._process_returncode()
+            log = logger.info if returncode == 0 and self._current_error is None else logger.warning
+            log(
                 "FFmpeg stream ended for track %r: host=%s format=%s pid=%s "
                 "returncode=%s frames=%s elapsed_ms=%s error=%s",
                 self._title,
                 self._stream_host,
                 self._format_id,
                 self._process_id(),
-                self._process_returncode(),
+                returncode,
                 self._frames_read,
                 self._elapsed_ms(),
-                self._error_kind(self._current_error, self._stderr.getvalue()),
+                self._error_kind(self._current_error, self._stderr.getvalue(), returncode),
             )
         return data
 
@@ -81,18 +83,21 @@ class _LoggedAudioSource(discord.AudioSource):
         return self._source.is_opus()
 
     def cleanup(self) -> None:
-        self._cleanup_count += 1
+        if self._cleaned_up:
+            return
+        self._cleaned_up = True
         process = getattr(self._source, "_process", None)
         pid = getattr(process, "pid", "unknown")
         returncode_before = self._process_returncode(process)
-        self._source.cleanup()
-        self._stream.close()
+        try:
+            self._source.cleanup()
+        finally:
+            self._stream.close()
         logger.info(
-            "FFmpeg cleanup for track %r: pid=%s cleanup_count=%s returncode=%s->%s "
+            "FFmpeg cleanup for track %r: pid=%s returncode=%s->%s "
             "frames=%s elapsed_ms=%s",
             self._title,
             pid,
-            self._cleanup_count,
             returncode_before,
             self._process_returncode(process),
             self._frames_read,
@@ -119,7 +124,13 @@ class _LoggedAudioSource(discord.AudioSource):
         return round((time.monotonic() - self._started_at) * 1000)
 
     @staticmethod
-    def _error_kind(error: Exception | None, stderr: bytes = b"") -> str:
+    def _error_kind(
+        error: Exception | None,
+        stderr: bytes = b"",
+        returncode: int | str | None = None,
+    ) -> str:
+        if returncode == 0 and error is None:
+            return "none"
         message = f"{error or ''}\n{stderr.decode(errors='replace')}"
         for status in ("403", "404", "429", "500", "502", "503"):
             if status in message:
