@@ -115,7 +115,7 @@ The bot sends a silent, clickable `Now playing` message whenever a track starts.
 
 Queues are held in memory. Restarting the container clears active queues and playback state.
 
-Playback currently streams directly from YouTube rather than prebuffering complete tracks. Short network or CDN interruptions may still cause audio jitter; Lavalink or temporary-file playback is not implemented yet.
+Playback relays YouTube media through yt-dlp's HTTP client to FFmpeg stdin rather than prebuffering complete tracks. Short network or CDN interruptions may still cause audio jitter; Lavalink or temporary-file playback is not implemented yet.
 
 ## Playback Troubleshooting
 
@@ -128,7 +128,8 @@ docker compose logs --since 10m bot
 Useful diagnostic messages include:
 
 - `FFmpeg produced first audio frame`: FFmpeg opened the stream and returned audio.
-- `FFmpeg stream ended ... frames=0 error=http_403`: YouTube rejected the stream before audio started.
+- `YouTube media stream opening failed ... status=403`: YouTube rejected the resolved stream before audio started.
+- `FFmpeg stream ended ... frames=0`: FFmpeg could not decode audio from the relayed stream.
 - `FFmpeg stream ended ... frames>0`: The stream failed after playback had begun.
 - `FFmpeg cleanup ... returncode=None->-9`: FFmpeg was forcefully cleaned up while still running; correlate this with the preceding stream and callback messages before treating it as the root cause.
 

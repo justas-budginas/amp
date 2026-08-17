@@ -7,10 +7,12 @@ from discord_music_bot.music.models import Track
 from discord_music_bot.music.player import FfmpegPlayer
 
 
-def test_ffmpeg_player_reads_stream_at_real_time(monkeypatch) -> None:
+def test_ffmpeg_player_reads_relayed_stream_at_real_time(monkeypatch) -> None:
     captured: dict[str, object] = {}
+    stream = io.BytesIO(b"audio")
 
-    def fake_ffmpeg(_url: str, **kwargs: object) -> object:
+    def fake_ffmpeg(source: object, **kwargs: object) -> object:
+        captured["source"] = source
         captured.update(kwargs)
         return SimpleNamespace(cleanup=lambda: None, is_opus=lambda: False)
 
@@ -21,11 +23,14 @@ def test_ffmpeg_player_reads_stream_at_real_time(monkeypatch) -> None:
             title="track",
             source_url="https://youtube.com/watch?v=track",
             stream_url="https://stream.example/track",
-        )
+        ),
+        stream,
     )
 
     options = shlex.split(captured["before_options"])
-    assert options[:2] == ["-re", "-reconnect"]
+    assert captured["source"] is stream
+    assert captured["pipe"] is True
+    assert options == ["-re"]
 
 
 def test_ffmpeg_diagnostics_redact_stream_url(monkeypatch, caplog) -> None:
@@ -63,7 +68,8 @@ def test_ffmpeg_diagnostics_redact_stream_url(monkeypatch, caplog) -> None:
                 title="track",
                 source_url="https://youtube.com/watch?v=track",
                 stream_url="https://rr.example/videoplayback?itag=251&sig=secret",
-            )
+            ),
+            io.BytesIO(),
         )
         audio.read()
 
@@ -114,7 +120,8 @@ def test_ffmpeg_diagnostics_capture_stderr_after_zero_frame_exit(monkeypatch, ca
                 title="track",
                 source_url="https://youtube.com/watch?v=track",
                 stream_url="https://rr.example/videoplayback?itag=251&sig=secret",
-            )
+            ),
+            io.BytesIO(),
         )
         audio.read()
 

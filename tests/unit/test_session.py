@@ -14,9 +14,12 @@ class FakeSource:
     async def resolve(self, track: Track) -> Track:
         return track
 
+    async def open_stream(self, _track: Track):
+        raise NotImplementedError
+
 
 class FakePlayer:
-    def create_source(self, _track: Track):
+    def create_source(self, _track: Track, _stream):
         raise NotImplementedError
 
 
@@ -47,6 +50,17 @@ class PlaybackSource:
     async def resolve(self, track: Track) -> Track:
         return track
 
+    async def open_stream(self, _track: Track):
+        return PlaybackStream()
+
+
+class PlaybackStream:
+    def read(self, _size: int = -1) -> bytes:
+        return b""
+
+    def close(self) -> None:
+        pass
+
 
 class PlaybackAudio:
     def cleanup(self) -> None:
@@ -54,7 +68,7 @@ class PlaybackAudio:
 
 
 class PlaybackPlayer:
-    def create_source(self, _track: Track) -> PlaybackAudio:
+    def create_source(self, _track: Track, _stream: PlaybackStream) -> PlaybackAudio:
         return PlaybackAudio()
 
 

@@ -17,7 +17,7 @@ Docker is the primary way to run the bot on a server. Local Python execution is 
 - Ordered playlist queueing, bounded by `MAX_QUEUE_SIZE`.
 - Per-guild in-memory queues and playback sessions.
 - `/play`, `/queue`, `/nowplaying`, `/skip`, `/next`, `/previous`, `/back`, `/clear`, `/stop`, and `/leave`.
-- Fresh YouTube stream resolution before playback, YouTube request headers passed to FFmpeg, and format 18 compatibility playback.
+- Fresh YouTube stream resolution before playback, media relayed through yt-dlp's HTTP client to FFmpeg stdin, and audio-only format selection.
 - Silent clickable now-playing announcements when the bot can send messages in the command channel.
 - Automated unit tests, Ruff checks, and Mypy checks.
 
@@ -134,7 +134,7 @@ discord-music-bot/
 6. For a playlist, the source adapter expands entries in their original order and returns normalized tracks or entry-level failures.
 7. The session validates the complete expansion against queue and playlist limits, then adds the accepted tracks atomically so a partially expanded request does not leave an unexpected partial queue.
 8. A session playback worker starts the next track if nothing is currently playing.
-9. FFmpeg reads the audio stream and supplies Discord-compatible audio.
+9. yt-dlp opens the resolved media stream and relays it to FFmpeg stdin; FFmpeg supplies Discord-compatible audio without making a second HTTP request to YouTube.
 10. The playback completion callback schedules the next queue operation safely on the asyncio event loop.
 11. When the queue is empty, the session waits for the idle timeout and disconnects.
 

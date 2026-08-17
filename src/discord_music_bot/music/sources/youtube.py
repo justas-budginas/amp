@@ -11,11 +11,31 @@ from ..models import SourceResult, Track
 from .base import (
     ExtractionError,
     InvalidSourceError,
+    MediaStream,
     NoPlayableTracksError,
     SourceAdapter,
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _YoutubeStream:
+    def __init__(self, response: MediaStream, downloader: yt_dlp.YoutubeDL) -> None:
+        self._response = response
+        self._downloader = downloader
+        self._closed = False
+
+    def read(self, size: int = -1) -> bytes:
+        return self._response.read(size)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._response.close()
+        finally:
+            self._downloader.close()
 
 
 class YoutubeSource(SourceAdapter):
@@ -93,6 +113,57 @@ class YoutubeSource(SourceAdapter):
             resolved.duration,
         )
         return resolved
+
+    async def open_stream(self, track: Track) -> MediaStream:
+        if not track.stream_url:
+            raise ExtractionError(f"no playable stream found for {track.title}")
+        stream_url = urlparse(track.stream_url)
+        try:
+            stream = await asyncio.wait_for(
+                asyncio.to_thread(self._open_stream_sync, track),
+                timeout=self._timeout_seconds,
+            )
+        except TimeoutError as exc:
+            logger.warning(
+                "YouTube media stream opening timed out: title=%r host=%s",
+                track.title,
+                stream_url.hostname or "unknown",
+            )
+            raise ExtractionError("YouTube stream opening timed out") from exc
+        except Exception as exc:
+            status = getattr(exc, "status", "unknown")
+            logger.warning(
+                "YouTube media stream opening failed: title=%r host=%s "
+                "error_type=%s status=%s",
+                track.title,
+                stream_url.hostname or "unknown",
+                type(exc).__name__,
+                status if isinstance(status, int) else "unknown",
+            )
+            raise ExtractionError("YouTube stream opening failed") from exc
+        logger.info(
+            "Opened YouTube media stream: title=%r host=%s format=%s transport=relay",
+            track.title,
+            stream_url.hostname or "unknown",
+            parse_qs(stream_url.query).get("itag", ["unknown"])[0],
+        )
+        return stream
+
+    @staticmethod
+    def _open_stream_sync(track: Track) -> MediaStream:
+        downloader = yt_dlp.YoutubeDL(
+            {
+                "quiet": True,
+                "no_warnings": True,
+                "http_headers": dict(track.http_headers),
+            }
+        )
+        try:
+            response = downloader.urlopen(yt_dlp.networking.Request(track.stream_url or ""))
+        except Exception:
+            downloader.close()
+            raise
+        return _YoutubeStream(response, downloader)
 
     async def _extract_info(self, url: str, *, playlist: bool) -> Mapping[str, object] | None:
         options: dict[str, object] = {

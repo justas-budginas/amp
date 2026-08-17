@@ -5,11 +5,13 @@ import logging
 import shlex
 import subprocess
 import time
+from typing import cast
 from urllib.parse import parse_qs, urlparse
 
 import discord
 
 from .models import Track
+from .sources.base import MediaStream
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +21,16 @@ class PlaybackError(RuntimeError):
 
 
 class _LoggedAudioSource(discord.AudioSource):
-    def __init__(self, source: discord.AudioSource, track: Track, stderr: io.BytesIO) -> None:
+    def __init__(
+        self,
+        source: discord.AudioSource,
+        track: Track,
+        stderr: io.BytesIO,
+        stream: MediaStream,
+    ) -> None:
         self._source = source
         self._stderr = stderr
+        self._stream = stream
         self._title = track.title
         self._stream_host = urlparse(track.stream_url or "").hostname or "unknown"
         self._format_id = parse_qs(urlparse(track.stream_url or "").query).get(
@@ -77,6 +86,7 @@ class _LoggedAudioSource(discord.AudioSource):
         pid = getattr(process, "pid", "unknown")
         returncode_before = self._process_returncode(process)
         self._source.cleanup()
+        self._stream.close()
         logger.info(
             "FFmpeg cleanup for track %r: pid=%s cleanup_count=%s returncode=%s->%s "
             "frames=%s elapsed_ms=%s",
@@ -136,31 +146,17 @@ class FfmpegPlayer:
     def __init__(self, executable: str) -> None:
         self._executable = executable
 
-    def create_source(self, track: Track) -> discord.AudioSource:
+    def create_source(self, track: Track, stream: MediaStream) -> discord.AudioSource:
         if not track.stream_url:
             raise PlaybackError(f"no stream URL is available for {track.title}")
-        before_options = [
-            "-re",
-            "-reconnect",
-            "1",
-            "-reconnect_streamed",
-            "1",
-            "-reconnect_delay_max",
-            "5",
-        ]
-        if track.http_headers:
-            header_value = "".join(
-                f"{header_name}: {header_value}\r\n"
-                for header_name, header_value in track.http_headers
-            )
-            before_options.extend(("-headers", header_value))
         try:
             stderr = io.BytesIO()
             source = discord.FFmpegPCMAudio(
-                track.stream_url,
+                cast(io.BufferedIOBase, stream),
                 executable=self._executable,
+                pipe=True,
                 stderr=stderr,
-                before_options=shlex.join(before_options),
+                before_options=shlex.join(["-re"]),
                 options="-vn -loglevel error",
             )
             logger.info(
@@ -172,8 +168,9 @@ class FfmpegPlayer:
                 getattr(getattr(source, "_process", None), "pid", "unknown"),
                 tuple(header_name for header_name, _ in track.http_headers),
             )
-            return _LoggedAudioSource(source, track, stderr)
+            return _LoggedAudioSource(source, track, stderr, stream)
         except (OSError, discord.ClientException) as exc:
+            stream.close()
             logger.warning(
                 "FFmpeg source creation failed for track %r: error_type=%s",
                 track.title,

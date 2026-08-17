@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Protocol
 
 from ..models import SourceResult, Track
 
@@ -25,6 +26,12 @@ class NoPlayableTracksError(SourceError):
     """Raised when a source contains no playable tracks."""
 
 
+class MediaStream(Protocol):
+    def read(self, size: int = -1) -> bytes: ...
+
+    def close(self) -> None: ...
+
+
 class SourceAdapter(ABC):
     @abstractmethod
     async def load(self, url: str) -> SourceResult:
@@ -33,3 +40,7 @@ class SourceAdapter(ABC):
     @abstractmethod
     async def resolve(self, track: Track) -> Track:
         """Resolve a fresh stream URL for a queued track."""
+
+    @abstractmethod
+    async def open_stream(self, track: Track) -> MediaStream:
+        """Open the resolved media stream without blocking the event loop."""

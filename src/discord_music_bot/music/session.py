@@ -13,7 +13,7 @@ import discord
 from .models import PlaybackState, Track
 from .player import FfmpegPlayer
 from .queue import QueueFullError, TrackQueue
-from .sources.base import ExtractionError, SourceAdapter
+from .sources.base import ExtractionError, MediaStream, SourceAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +237,7 @@ class MusicSession:
                     return
 
                 audio: discord.AudioSource | None = None
+                stream: MediaStream | None = None
                 finished = asyncio.Event()
                 callback_error: list[Exception | None] = [None]
                 loop = asyncio.get_running_loop()
@@ -250,7 +251,9 @@ class MusicSession:
                         track.title,
                     )
                     resolved = await self._source.resolve(track)
-                    audio = self._player.create_source(resolved)
+                    stream = await self._source.open_stream(resolved)
+                    audio = self._player.create_source(resolved, stream)
+                    stream = None
                     logger.info(
                         "Starting voice playback in guild %s: title=%r",
                         self.guild_id,
@@ -323,6 +326,8 @@ class MusicSession:
                 finally:
                     if audio is not None:
                         audio.cleanup()
+                    elif stream is not None:
+                        stream.close()
                     async with self._lock:
                         if self._discard_track is track:
                             self._discard_track = None
