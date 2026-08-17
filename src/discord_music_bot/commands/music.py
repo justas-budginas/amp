@@ -54,8 +54,12 @@ class MusicCog(commands.Cog):
         except (SourceError, QueueFullError, VoiceChannelError, ValueError) as exc:
             await interaction.followup.send(self._user_error(exc))
             return
-        except Exception:
-            logger.exception("Unexpected /play failure in guild %s", guild.id)
+        except Exception as exc:
+            logger.error(
+                "Unexpected /play failure in guild %s: error_type=%s",
+                guild.id,
+                type(exc).__name__,
+            )
             await interaction.followup.send("Could not start playback. Check the bot logs.")
             return
 

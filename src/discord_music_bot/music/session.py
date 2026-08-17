@@ -307,10 +307,18 @@ class MusicSession:
                             else:
                                 self._history.append(track)
                 except ExtractionError as exc:
-                    logger.info("Could not resolve track in guild %s: %s", self.guild_id, exc)
+                    logger.info(
+                        "Could not resolve track in guild %s: error_type=%s",
+                        self.guild_id,
+                        type(exc).__name__,
+                    )
                     await self._notify(f"Could not play **{track.title}**; skipping it.")
-                except Exception:
-                    logger.exception("Unexpected playback failure in guild %s", self.guild_id)
+                except Exception as exc:
+                    logger.error(
+                        "Unexpected playback failure in guild %s: error_type=%s",
+                        self.guild_id,
+                        type(exc).__name__,
+                    )
                     await self._notify(f"Playback failed for **{track.title}**; skipping it.")
                 finally:
                     if audio is not None:
@@ -366,7 +374,7 @@ class MusicSession:
             logger.info("Announced now playing in guild %s: %s", self.guild_id, track.title)
         except Exception as exc:
             logger.warning(
-                "Could not send now-playing notification in guild %s: %s",
+                "Could not send now-playing notification in guild %s: error_type=%s",
                 self.guild_id,
-                exc,
+                type(exc).__name__,
             )

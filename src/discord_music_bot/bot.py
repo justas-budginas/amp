@@ -9,6 +9,7 @@ from discord.ext import commands
 
 from .commands.music import MusicCog
 from .config import Settings, load_settings
+from .log import RedactingFormatter
 from .music.manager import MusicManager
 
 logger = logging.getLogger(__name__)
@@ -52,12 +53,20 @@ class MusicBot(commands.Bot):
 
 def run_bot() -> None:
     settings = load_settings()
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        RedactingFormatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s",
+            secrets=(settings.discord_token,),
+        )
+    )
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=(handler,),
+        force=True,
     )
     bot = MusicBot(settings)
-    bot.run(settings.discord_token)
+    bot.run(settings.discord_token, log_handler=None)
 
 
 def healthcheck() -> int:

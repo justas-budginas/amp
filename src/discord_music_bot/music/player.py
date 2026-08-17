@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import logging
 import shlex
+import subprocess
 import time
 from urllib.parse import parse_qs, urlparse
 
@@ -18,8 +19,9 @@ class PlaybackError(RuntimeError):
 
 
 class _LoggedAudioSource(discord.AudioSource):
-    def __init__(self, source: discord.AudioSource, track: Track) -> None:
+    def __init__(self, source: discord.AudioSource, track: Track, stderr: io.BytesIO) -> None:
         self._source = source
+        self._stderr = stderr
         self._title = track.title
         self._stream_host = urlparse(track.stream_url or "").hostname or "unknown"
         self._format_id = parse_qs(urlparse(track.stream_url or "").query).get(
@@ -46,6 +48,7 @@ class _LoggedAudioSource(discord.AudioSource):
                 )
             return data
 
+        self._settle_process()
         error = getattr(self._source, "_current_error", None)
         if isinstance(error, Exception):
             self._current_error = error
@@ -61,7 +64,7 @@ class _LoggedAudioSource(discord.AudioSource):
                 self._process_returncode(),
                 self._frames_read,
                 self._elapsed_ms(),
-                self._error_kind(self._current_error),
+                self._error_kind(self._current_error, self._stderr.getvalue()),
             )
         return data
 
@@ -106,14 +109,27 @@ class _LoggedAudioSource(discord.AudioSource):
         return round((time.monotonic() - self._started_at) * 1000)
 
     @staticmethod
-    def _error_kind(error: Exception | None) -> str:
-        if error is None:
-            return "none"
-        message = str(error)
+    def _error_kind(error: Exception | None, stderr: bytes = b"") -> str:
+        message = f"{error or ''}\n{stderr.decode(errors='replace')}"
         for status in ("403", "404", "429", "500", "502", "503"):
             if status in message:
                 return f"http_{status}"
-        return type(error).__name__
+        if error is None and not stderr:
+            return "none"
+        return type(error).__name__ if error is not None else "ffmpeg_error"
+
+    def _settle_process(self) -> None:
+        process = getattr(self._source, "_process", None)
+        wait = getattr(process, "wait", None)
+        if callable(wait):
+            try:
+                wait(timeout=0.1)
+            except (subprocess.TimeoutExpired, TimeoutError):
+                pass
+        reader = getattr(self._source, "_pipe_reader_thread", None)
+        join = getattr(reader, "join", None)
+        if callable(join):
+            join(timeout=0.1)
 
 
 class FfmpegPlayer:
@@ -139,10 +155,11 @@ class FfmpegPlayer:
             )
             before_options.extend(("-headers", header_value))
         try:
+            stderr = io.BytesIO()
             source = discord.FFmpegPCMAudio(
                 track.stream_url,
                 executable=self._executable,
-                stderr=io.BytesIO(),
+                stderr=stderr,
                 before_options=shlex.join(before_options),
                 options="-vn -loglevel error",
             )
@@ -155,7 +172,7 @@ class FfmpegPlayer:
                 getattr(getattr(source, "_process", None), "pid", "unknown"),
                 tuple(header_name for header_name, _ in track.http_headers),
             )
-            return _LoggedAudioSource(source, track)
+            return _LoggedAudioSource(source, track, stderr)
         except (OSError, discord.ClientException) as exc:
             logger.warning(
                 "FFmpeg source creation failed for track %r: error_type=%s",
